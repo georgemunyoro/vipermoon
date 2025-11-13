@@ -1,3 +1,4 @@
+import re
 from typing import Union
 
 from ..error import CompileError
@@ -46,19 +47,6 @@ class Scanner:
             )
         return self.advance()
 
-    def skip_comment(self):
-        try:
-            a = self.source[self.location.index]
-            b = self.source[self.location.index + 1]
-        except Exception as e:
-            return
-
-        if a != "-" or b != "-":
-            return
-
-        while self.current != "\n":
-            self.advance()
-
     def is_at(self, s: str):
         if len(self.source) < (self.location.index + len(s)):
             return False
@@ -80,7 +68,7 @@ class Scanner:
         match c:
             case c if c.isalpha() or c == "_":
                 while self.current is not None and (
-                    self.current.isalpha() or self.current == "_"
+                    self.current.isalnum() or self.current == "_"
                 ):
                     self.advance()
 
@@ -100,81 +88,6 @@ class Scanner:
 
             case c if c.isdigit():
                 return self.scan_numeric()
-
-            case "-":
-                self.advance()
-                if self.current is not None and self.current == "-":
-                    while self.current is not None and self.current != "\n":
-                        self.advance()
-
-                    return self.next_token
-
-                return Token(
-                    TokenKind.MINUS,
-                    start,
-                    self.location,
-                    self.lexeme(start.index),
-                )
-
-            case ".":
-
-                self.advance()
-                if self.current is not None and self.current == ".":
-                    self.advance()
-                    if self.current is not None and self.current == ".":
-                        self.advance()
-
-                lexeme = self.lexeme(start.index)
-                return Token(
-                    self.LEXEME_TOKEN_MAP[lexeme],
-                    start,
-                    self.location,
-                    lexeme,
-                )
-
-            case '"' | "'":
-                opening_quote = self.advance()
-
-                lexeme = ""
-
-                while self.current is not None and self.current != opening_quote:
-                    if self.advance() == "\\":
-                        match c := self.advance():
-                            case (
-                                "n"
-                                | "t"
-                                | "\\"
-                                | "a"
-                                | '"'
-                                | "'"
-                                | "b"
-                                | "f"
-                                | "r"
-                                | "v"
-                            ):
-                                ...
-
-                            case c if c and c.isdigit():
-                                ...
-
-                            case _:
-                                raise CompileError(
-                                    message=f"invalid escape character: {c}",
-                                )
-
-                if self.advance() != opening_quote:
-                    raise CompileError(
-                        message=f"unterminated string, expected ending quote",
-                        span=Span(start, self.location),
-                        source_line=self.lines[start.line - 1],
-                    )
-
-                return Token(
-                    TokenKind.STRING,
-                    start,
-                    self.location,
-                    self.lexeme(start.index),
-                )
 
             case "[":
                 kind = TokenKind.LBRACKET
@@ -211,6 +124,125 @@ class Scanner:
                     start,
                     self.location,
                     self.lexeme(start.index),
+                )
+
+            case "-":
+                self.advance()
+                if self.current is not None and self.current == "-":
+                    self.advance()
+
+                    if m := re.match(r"^\[[=]+\[", self.source[self.location.index :]):
+                        opening_quote = m.group()
+                        closing_quote = opening_quote.replace("[", "]")
+
+                        while self.current and not self.is_at(closing_quote):
+                            self.advance()
+
+                        if not self.is_at(closing_quote):
+                            raise CompileError(
+                                message=f"unterminated multiline comment, expected ending quote",
+                                span=Span(start, self.location),
+                                source_line=self.lines[start.line - 1],
+                            )
+
+                        for _ in range(len(opening_quote)):
+                            self.advance()
+
+                        return self.next_token
+
+                    while self.current is not None and self.current != "\n":
+                        self.advance()
+
+                    return self.next_token
+
+                return Token(
+                    TokenKind.MINUS,
+                    start,
+                    self.location,
+                    self.lexeme(start.index),
+                )
+
+            case ".":
+
+                self.advance()
+                if self.current is not None and self.current == ".":
+                    self.advance()
+                    if self.current is not None and self.current == ".":
+                        self.advance()
+
+                lexeme = self.lexeme(start.index)
+                return Token(
+                    self.LEXEME_TOKEN_MAP[lexeme],
+                    start,
+                    self.location,
+                    lexeme,
+                )
+
+            case '"' | "'":
+                opening_quote = self.advance()
+
+                lexeme = ""
+
+                while self.current is not None and self.current != opening_quote:
+                    if self.current == "\\":
+                        self.advance()
+                        c = self.current
+
+                        match c:
+                            case "n":
+                                lexeme += "\n"
+                            case "t":
+                                lexeme += "\t"
+                            case "\\":
+                                lexeme += "\\"
+                            case "a":
+                                lexeme += "\a"
+                            case '"':
+                                lexeme += '"'
+                            case "'":
+                                lexeme += "'"
+                            case "b":
+                                lexeme += "\b"
+                            case "f":
+                                lexeme += "\f"
+                            case "b":
+                                lexeme += "\b"
+                            case "f":
+                                lexeme += "\f"
+                            case "r":
+                                lexeme += "\r"
+                            case "v":
+                                lexeme += "\v"
+                            case "\n":
+                                lexeme += "\n"
+
+                            case c if c and c.isdigit():
+                                d = f"{c}{self.advance()}"
+                                lexeme += chr(int(d))
+
+                            case _:
+                                raise CompileError(
+                                    message=f"invalid escape character: {c}",
+                                    span=Span(self.location, self.location),
+                                    source_line=self.lines[self.location.line - 1],
+                                )
+                    else:
+                        lexeme += self.current
+
+                    self.advance()
+
+                if self.advance() != opening_quote:
+                    raise CompileError(
+                        message=f"unterminated string, expected ending quote",
+                        span=Span(start, self.location),
+                        source_line=self.lines[start.line - 1],
+                    )
+
+                return Token(
+                    TokenKind.STRING,
+                    start,
+                    self.location,
+                    lexeme,
                 )
 
             case "=" | "<" | ">" | "~":

@@ -204,6 +204,7 @@ class FuncBody(Node):
 class FunctionCall(Exp):
     func: Exp
     args: List[Node]  # or TableConstructor/String for table call / string call
+    method: Optional[Token] = None
 
 
 @dataclass
@@ -455,11 +456,12 @@ def print_ast_node(node, indent=0, is_last=True, prefix=""):
         print(f"{current_prefix}FunctionCall")
         print(f"{next_prefix}├── Function:")
         print_ast_node(node.func, indent + 2, False, next_prefix + "│   ")
+        if node.method:
+            print(f"{next_prefix}├── Method: {node.method.lexeme}")
         print(f"{next_prefix}└── Args:")
         for i, arg in enumerate(node.args):
-            print_ast_node(
-                arg, indent + 2, i == len(node.args) - 1, next_prefix + "    "
-            )
+            is_last = i == len(node.args) - 1
+            print_ast_node(arg, indent + 2, is_last, next_prefix + "    ")
 
     elif isinstance(node, Field):
         if node.key is None:

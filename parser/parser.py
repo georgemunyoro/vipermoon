@@ -109,12 +109,11 @@ class Parser:
 
         statements = []
         while self.current and not (
-            self.check(TokenKind.END) or self.check(TokenKind.UNTIL)
+            self.check(TokenKind.END)
+            or self.check(TokenKind.UNTIL)
+            or self.check(TokenKind.ELSE)
+            or self.check(TokenKind.ELSEIF)
         ):
-            statements.append(self.parse_stat())
-            if self.check(TokenKind.SEMICOLON):
-                self.consume()
-
             if self.check(TokenKind.BREAK):
                 token = self.fconsume()
                 statements.append(Break(Span(token.start, token.end)))
@@ -124,6 +123,16 @@ class Parser:
 
             if self.check(TokenKind.RETURN):
                 ret = self.fconsume()
+
+                if (
+                    self.check(TokenKind.UNTIL)
+                    or self.check(TokenKind.END)
+                    or self.check(TokenKind.ELSE)
+                    or self.check(TokenKind.ELSEIF)
+                ):
+                    statements.append(Return(Span(ret.start, ret.end), []))
+                    break
+
                 explist = []
                 while True:
                     explist.append(self.parse_exp())
@@ -139,6 +148,10 @@ class Parser:
                 if self.check(TokenKind.SEMICOLON):
                     self.consume()
                 break
+
+            statements.append(self.parse_stat())
+            if self.check(TokenKind.SEMICOLON):
+                self.consume()
 
         span_end = statements[-1].span.end if len(statements) > 0 else at
         return Block(Span(at, span_end), statements)
@@ -186,18 +199,16 @@ class Parser:
 
             case (TokenKind.LBRACE, _):
                 self.consume()
-
-                fieldlist = [] if self.check(TokenKind.RBRACE) else [self.parse_field()]
-
-                while self.check(TokenKind.COMMA) or self.check(TokenKind.SEMICOLON):
-                    self.advance()
+                fieldlist = []
+                while not self.check(TokenKind.RBRACE):
                     fieldlist.append(self.parse_field())
+                    if not self.check(TokenKind.COMMA) and not self.check(
+                        TokenKind.SEMICOLON
+                    ):
+                        break
 
-                if self.check(TokenKind.COMMA) or self.check(TokenKind.SEMICOLON):
                     self.advance()
-
                 rbrace = self.expect(TokenKind.RBRACE)
-
                 return TableConstructor(Span(token.start, rbrace.end), fieldlist)
 
         if node:
@@ -211,9 +222,19 @@ class Parser:
                 case (
                     TokenKind.PLUS
                     | TokenKind.MINUS
+                    | TokenKind.STAR
+                    | TokenKind.SLASH
+                    | TokenKind.POW
+                    | TokenKind.MOD
+                    | TokenKind.CONCAT
                     | TokenKind.LT
+                    | TokenKind.LE
                     | TokenKind.GT
+                    | TokenKind.GE
                     | TokenKind.EQ
+                    | TokenKind.NE
+                    | TokenKind.AND
+                    | TokenKind.OR
                 ):
                     op = self.fconsume()
                     r = self.parse_exp()
@@ -232,15 +253,12 @@ class Parser:
             self.expect(TokenKind.ASSIGN)
             value = self.parse_exp()
             return Field(Span(token.start, value.span.end), key, value)
-
-        elif self.match(TokenKind.IDENTIFIER):
-            key = Var(Span(token.start, token.end), token.lexeme)
-            self.expect(TokenKind.ASSIGN)
-            value = self.parse_exp()
-            return Field(Span(token.start, value.span.end), key, value)
-
         else:
             value = self.parse_exp()
+            if self.match(TokenKind.ASSIGN):
+                key = value
+                val = self.parse_exp()
+                return Field(Span(key.span.start, val.span.end), key, val)
             return Field(value.span, None, value)
 
     def parse_funcbody(self) -> FuncBody:
@@ -278,23 +296,9 @@ class Parser:
             end = self.expect(TokenKind.COLON)
             return Label(Span(token.start, end.end), label)
 
-        if self.match(TokenKind.BREAK):
-            return Break(span)
-
         if self.match(TokenKind.GOTO):
             label = self.expect(TokenKind.IDENTIFIER)
             return Goto(Span(token.start, label.end), label)
-
-        if self.match(TokenKind.RETURN):
-            explist = []
-            while True:
-                explist.append(self.parse_exp())
-                if not self.match(TokenKind.COMMA):
-                    break
-            end = explist[-1].span.end if len(explist) > 0 else token.end
-            if self.check(TokenKind.SEMICOLON):
-                end = self.fconsume().end
-            return Return(Span(token.start, end), explist)
 
         if self.match(TokenKind.DO):
             block = self.parse_chunk(token.start)
@@ -315,28 +319,11 @@ class Parser:
 
         if self.match(TokenKind.IF):
             condition = self.parse_exp()
-            then_token = self.expect(TokenKind.THEN)
-
             branches = []
-            else_block = None
-
-            statements = []
-            while self.current and not (
-                self.check(TokenKind.ELSEIF)
-                or self.check(TokenKind.ELSE)
-                or self.check(TokenKind.END)
-            ):
-                statements.append(self.parse_stat())
-
-            branches.append(
-                (
-                    condition,
-                    Block(Span(then_token.start, self.fpeek().start), statements),
-                )
-            )
+            else_block = self.parse_chunk(self.expect(TokenKind.THEN).start)
+            branches.append((condition, else_block))
 
             while self.check(TokenKind.ELSEIF):
-
                 elseif_token = self.expect(TokenKind.ELSEIF)
                 elseif_cond = self.parse_exp()
                 self.expect(TokenKind.THEN)
@@ -427,7 +414,7 @@ class Parser:
                 if not self.match(TokenKind.COMMA):
                     break
 
-            if len(vars) > 1 or self.match(TokenKind.ASSIGN):
+            if len(vars) == 1 and self.match(TokenKind.ASSIGN):
                 var: Token = vars[0]
                 start = self.parse_exp()
                 self.expect(TokenKind.COMMA)
@@ -484,6 +471,26 @@ class Parser:
         else:
             raise CompileError("expected statement")
 
+    def parse_args(self) -> List[Node]:
+        if self.check(TokenKind.STRING):
+            token = self.expect(TokenKind.STRING)
+            return [String(Span(token.start, token.end), token.lexeme)]
+
+        if self.check(TokenKind.LBRACE):
+            return [self.parse_exp()]
+
+        if self.match(TokenKind.LPAREN):
+            explist = []
+            if not self.check(TokenKind.RPAREN):
+                while True:
+                    explist.append(self.parse_exp())
+                    if not self.match(TokenKind.COMMA):
+                        break
+            self.expect(TokenKind.RPAREN)
+            return explist
+
+        raise CompileError("expected args")
+
     def parse_prefixexp(self):
         token = self.fpeek()
         node = None
@@ -510,6 +517,15 @@ class Parser:
 
             elif self.match(TokenKind.COLON):
                 ident = self.expect(TokenKind.IDENTIFIER)
+                args = self.parse_args()
+                node = FunctionCall(
+                    span=Span(
+                        ident.start, args[-1].span.end if len(args) > 0 else ident.end
+                    ),
+                    func=node,
+                    method=ident,
+                    args=args,
+                )
 
             elif self.match(TokenKind.LPAREN):
                 explist = []
@@ -519,17 +535,39 @@ class Parser:
                         if not self.match(TokenKind.COMMA):
                             break
                 rparen = self.expect(TokenKind.RPAREN)
-                node = FunctionCall(Span(node.span.start, rparen.end), node, explist)
+                node = FunctionCall(
+                    span=Span(node.span.start, rparen.end), func=node, args=explist
+                )
 
             elif self.check(TokenKind.STRING):
                 token = self.expect(TokenKind.STRING)
                 explist: List[Node] = [
                     String(Span(token.start, token.end), token.lexeme)
                 ]
-                node = FunctionCall(Span(node.span.start, token.end), node, explist)
+                node = FunctionCall(
+                    span=Span(node.span.start, token.end), func=node, args=explist
+                )
 
             elif self.check(TokenKind.LBRACE):
-                raise Exception("todo")
+                lbrace = self.fconsume()
+
+                fieldlist = []
+                while not self.check(TokenKind.RBRACE):
+                    fieldlist.append(self.parse_field())
+                    if not self.check(TokenKind.COMMA) and not self.check(
+                        TokenKind.SEMICOLON
+                    ):
+                        break
+
+                    self.advance()
+
+                rbrace = self.expect(TokenKind.RBRACE)
+
+                return FunctionCall(
+                    span=Span(node.span.start, rbrace.end),
+                    func=node,
+                    args=[TableConstructor(Span(lbrace.start, rbrace.end), fieldlist)],
+                )
 
             else:
                 break
