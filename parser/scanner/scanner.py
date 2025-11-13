@@ -1,7 +1,4 @@
-from re import error
 from typing import Union
-
-import click
 
 from ..error import CompileError
 from ..location import Location, Span
@@ -87,8 +84,15 @@ class Scanner:
                 ):
                     self.advance()
 
+                lexeme = self.lexeme(start.index)
+                kind = (
+                    TokenKind.IDENTIFIER
+                    if lexeme not in self.LEXEME_TOKEN_MAP
+                    else self.LEXEME_TOKEN_MAP[lexeme]
+                )
+
                 return Token(
-                    TokenKind.STRING,
+                    kind,
                     start,
                     self.location,
                     self.lexeme(start.index),
@@ -106,7 +110,7 @@ class Scanner:
                     return self.next_token
 
                 return Token(
-                    TokenKind.STRING,
+                    TokenKind.MINUS,
                     start,
                     self.location,
                     self.lexeme(start.index),
