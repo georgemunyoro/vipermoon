@@ -45,6 +45,12 @@ class Assembler:
         for b in i:
             self.bytecode.append(b)
 
+    def write_number(self, val):
+        i = struct.pack("<d", val)
+        assert len(i) == 8
+        for b in i:
+            self.bytecode.append(b)
+
     def write_proto(self, proto: Prototype):
         self.write_size_t(len(proto.source_name) + 1)
         self.write_string(proto.source_name)
@@ -64,7 +70,7 @@ class Assembler:
         for const in proto.constants:
             self.write_byte(const.kind.value)
             if const.kind == Constant.Kind.NUMBER:
-                self.write_int(const.const)
+                self.write_number(const.const)
             elif const.kind == Constant.Kind.STRING:
                 self.write_size_t(len(str(const.const)) + 1)
                 self.write_string(str(const.const))
@@ -77,6 +83,11 @@ class Assembler:
 
         self.write_int(0)  # TODO: source line position list
 
-        self.write_int(0)  # TODO: locals list
+        self.write_int(len(proto.locals))
+        for local in proto.locals:
+            self.write_size_t(len(local.name) + 1)
+            self.write_string(local.name)
+            self.write_int(local.start)
+            self.write_int(local.end)
 
         self.write_int(0)  # TODO: upvalues list

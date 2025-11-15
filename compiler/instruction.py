@@ -49,6 +49,7 @@ def iABx(opcode, A, Bx):
 class Instruction:
     def __init__(self, instr: int):
         self.instr = instr
+        self.sourceline = 0
 
     @property
     def op(self):
