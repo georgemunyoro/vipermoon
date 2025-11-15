@@ -1,11 +1,7 @@
 import logging
 import struct
 from dataclasses import dataclass, field
-from enum import Enum
-from functools import total_ordering
 from io import BufferedReader
-from pprint import pformat, pprint
-from typing import Callable, Dict, List, Optional, Union
 
 from compiler.constant import Constant
 from compiler.instruction import Instruction
@@ -26,10 +22,9 @@ class LuaTable:
         self.fields[key] = value
 
     def __getitem__(self, key):
-        try:
-            return self.fields[key]
-        except KeyError as e:
-            return Constant(Constant.Kind.NIL, None)
+        if value := self.fields.get(key):
+            return value
+        return Constant(Constant.Kind.NIL, None)
 
 
 @dataclass
