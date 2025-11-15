@@ -23,5 +23,6 @@ vipermoon = "vipermoon:cli"
 
 [dependency-groups]
 dev = [
-    "twine (>=6.2.0,<7.0.0)"
+    "twine (>=6.2.0,<7.0.0)",
+    "pytest (>=9.0.1,<10.0.0)"
 ]

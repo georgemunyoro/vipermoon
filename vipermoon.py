@@ -7,7 +7,8 @@ from pprint import pprint
 
 import click
 
-from disassembler.disassembler import Disassembler, LuaFrame, run_frame
+from compiler.disassembler import Disassembler
+from interpreter.interpreter import LuaFrame, run_frame
 
 
 @click.command()
