@@ -3,8 +3,11 @@ from parser.ast import print_ast
 from parser.error import CompileError, format_error
 from parser.parser import Parser
 from parser.scanner import Scanner
+from pprint import pprint
 
 import click
+
+from disassembler.disassembler import Disassembler, LuaFrame, run_frame
 
 
 @click.command()
@@ -59,9 +62,29 @@ def parse(sourcefile: str, print_source: bool, print_tokens: bool) -> None:
             print(format_error(e))
 
 
+@click.command()
+@click.argument("sourcefile")
+def disassemble(sourcefile: str) -> None:
+    with open(sourcefile, "rb") as f:
+        disasm = Disassembler(f.read())
+        disasm.disassemble().dump()
+
+
+@click.command()
+@click.argument("sourcefile")
+def run(sourcefile: str) -> None:
+    with open(sourcefile, "rb") as f:
+        disasm = Disassembler(f.read())
+        proto = disasm.disassemble()
+        frame = LuaFrame(proto)
+        run_frame(frame)
+
+
 @click.group()
 def cli(): ...
 
 
 cli.add_command(scan)
 cli.add_command(parse)
+cli.add_command(disassemble)
+cli.add_command(run)
