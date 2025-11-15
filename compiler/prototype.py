@@ -38,9 +38,12 @@ class Prototype:
         )
 
         for i, instr in enumerate(self.instructions):
-            logging.info(
-                f"\t{i+1:<7} {'[' + str(self.source_line_position_list[i]) + ']':<7} {instr}"
-            )
+            if i < len(self.source_line_position_list):
+                logging.info(
+                    f"\t{i+1:<7} {'[' + str(self.source_line_position_list[i]) + ']':<7} {instr}"
+                )
+            else:
+                logging.info(f"\t{i+1:<7} {instr}")
 
         logging.info(f"constants ({len(self.constants)}):")
         for i, const in enumerate(self.constants):

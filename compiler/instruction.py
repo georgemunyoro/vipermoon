@@ -42,6 +42,10 @@ class Op(Enum):
     VARARG = 37
 
 
+def iABx(opcode, A, Bx):
+    return Instruction(opcode | ((A & 0xFF) << 6) | ((Bx & 0x3FFFF) << 14))
+
+
 class Instruction:
     def __init__(self, instr: int):
         self.instr = instr

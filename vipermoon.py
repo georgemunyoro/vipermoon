@@ -7,6 +7,8 @@ from pprint import pprint
 
 import click
 
+from compiler.assembler import Assembler
+from compiler.compile import compile
 from compiler.disassembler import Disassembler
 from interpreter.interpreter import LuaFrame, run_frame
 
@@ -81,6 +83,21 @@ def run(sourcefile: str) -> None:
         run_frame(frame)
 
 
+@click.command("compile")
+@click.argument("sourcefile")
+def compile_command(sourcefile: str) -> None:
+    with open(sourcefile, "r", errors="replace") as f:
+        ast = Parser(f.read()).parse_chunk()
+        print_ast(ast)
+        click.echo("-" * shutil.get_terminal_size().columns + "\n")
+        proto = compile(ast)
+
+        asm = Assembler()
+        asm.write_header()
+        asm.write_proto(proto)
+        asm.save()
+
+
 @click.group()
 def cli(): ...
 
@@ -89,3 +106,4 @@ cli.add_command(scan)
 cli.add_command(parse)
 cli.add_command(disassemble)
 cli.add_command(run)
+cli.add_command(compile_command)
