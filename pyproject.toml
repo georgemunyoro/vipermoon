@@ -1,6 +1,6 @@
 [project]
 name = "vipermoon"
-version = "0.1.0"
+version = "0.2.0"
 description = "A Lua interpreter implemented in Python"
 authors = [
     {name = "George Munyoro",email = "george.munyoro@icloud.com"}
