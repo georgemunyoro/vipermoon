@@ -7,6 +7,7 @@ from compiler.constant import Constant
 from compiler.disassembler import LuaTable
 from compiler.instruction import Op
 from compiler.prototype import Prototype
+from interpreter.globals import create_globals
 from interpreter.upvalue import UpValue
 
 
@@ -19,14 +20,6 @@ class LuaFrame:
 
         self.pc = 0
         self.upvalues = [None] * len(proto.upvalues)
-
-
-def create_gbl():
-    gbl = dict()
-
-    gbl["print"] = lambda *args: print(*args)
-
-    return gbl
 
 
 @dataclass
@@ -46,7 +39,7 @@ def is_truthy(arg):
     raise Exception(f"unhandled type: {arg}")
 
 
-def run_frame(frame: LuaFrame, gbl=create_gbl(), upvalues: List[UpValue] = []):
+def run_frame(frame: LuaFrame, gbl=create_globals(), upvalues: List[UpValue] = []):
     proto = frame.proto
     stack = frame.stack
     r = frame.stack

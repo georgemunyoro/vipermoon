@@ -138,7 +138,10 @@ class Disassembler:
         f = struct.unpack(
             "<d" if self.endian else ">d", bytearray(self.read_bytes(self.num_size))
         )
-        return f[0]
+        num = float(f[0])
+        if num.is_integer():
+            return int(num)
+        return num
 
     def read_int32(self):
         if not self.endian:
