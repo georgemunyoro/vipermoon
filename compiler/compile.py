@@ -1,4 +1,6 @@
 import parser.ast as ast
+from parser.scanner.token import TokenKind
+from typing import Optional
 
 from .constant import Constant
 from .instruction import Instruction, Op
@@ -35,9 +37,6 @@ class InstructionEmitter:
         # B=1: return 1 value
         self.emit_ABC(Op.RETURN, a, 2, 0)
 
-    def set_last_instr_sourceline(self, line: int):
-        self.proto.instructions[len(self.proto.instructions) - 1].sourceline = line
-
 
 class CodegenContext:
     def __init__(self, proto: Prototype):
@@ -57,13 +56,20 @@ class CodegenContext:
         self.proto.max_stack_size = self.max_stack_used
 
     # Register management
-    def alloc_reg(self):
+    def alloc_reg(self, msg: Optional[str] = None):
         r = self.reg_top
+
+        if msg:
+            print(f"ALLC({r}): {msg}")
+
         self.reg_top += 1
         self.max_stack_used = max(self.max_stack_used, self.reg_top)
         return r
 
-    def free_reg(self, r):
+    def free_reg(self, r, msg: Optional[str] = None):
+        if msg:
+            print(f"FREE({r}): {msg}")
+
         if r == self.reg_top - 1:
             self.reg_top -= 1
 
@@ -114,25 +120,22 @@ def compile_node(ctx: CodegenContext, node: ast.Node):
             rA,
             rB,
             num_return_values + 1,
-        )  # BUG: handle return value count
-        ctx.emitter.set_last_instr_sourceline(node.span.start.line)
+        )  # BUG: handle return value when arg is function call
 
         return rA
 
     elif isinstance(node, ast.Var):
-        r = ctx.alloc_reg()
+        rvalue = ctx.alloc_reg(f"getglobal {node.name}")
         k = ctx.constants.get(Constant(Constant.Kind.STRING, node.name))
-        ctx.emitter.emit_ABx(Op.GETGLOBAL, r, k)
-        ctx.emitter.set_last_instr_sourceline(node.span.start.line)
-        return r
+        ctx.emitter.emit_ABx(Op.GETGLOBAL, rvalue, k)
+        return rvalue
 
     elif isinstance(node, ast.FuncName):
         assert len(node.names) == 1
-        r = ctx.alloc_reg()
+        rvalue = ctx.alloc_reg(f"getglobal {node.names[0].lexeme}")
         k = ctx.constants.get(Constant(Constant.Kind.STRING, node.names[0].lexeme))
-        ctx.emitter.emit_ABx(Op.GETGLOBAL, r, k)
-        ctx.emitter.set_last_instr_sourceline(node.span.start.line)
-        return r
+        ctx.emitter.emit_ABx(Op.GETGLOBAL, rvalue, k)
+        return rvalue
 
     elif isinstance(node, ast.FunctionDef):
         proto = Prototype(
@@ -163,9 +166,8 @@ def compile_node(ctx: CodegenContext, node: ast.Node):
         pidx = len(ctx.proto.prototypes)
         ctx.proto.prototypes.append(proto)
 
-        r = ctx.alloc_reg()
-        ctx.emitter.emit_ABx(Op.CLOSURE, r, pidx)
-        ctx.emitter.set_last_instr_sourceline(node.span.start.line)
+        rvalue = ctx.alloc_reg(f"functiondef storing closure")
+        ctx.emitter.emit_ABx(Op.CLOSURE, rvalue, pidx)
 
         assert len(node.name.names) == 1
         fn_name = node.name.names[0]
@@ -173,7 +175,7 @@ def compile_node(ctx: CodegenContext, node: ast.Node):
         if not node.is_local:
             ctx.emitter.emit_ABx(
                 Op.SETGLOBAL,
-                r,
+                rvalue,
                 ctx.constants.get(
                     Constant(
                         Constant.Kind.STRING,
@@ -181,22 +183,19 @@ def compile_node(ctx: CodegenContext, node: ast.Node):
                     )
                 ),
             )
-            ctx.emitter.set_last_instr_sourceline(node.span.start.line)
-            ctx.free_reg(r)
+            ctx.free_reg(rvalue, "closure stored globally, freeing")
 
-        return r
+        return rvalue
 
     elif isinstance(node, ast.Return):
         if len(node.values) == 0:
             ctx.emitter.emit_ABC(Op.RETURN, 0, 1)
-            ctx.emitter.set_last_instr_sourceline(node.span.start.line)
             return
 
         regs = [compile_node(ctx, value) for value in node.values]
         first_reg = regs[0]
         num_values = len(regs) + 1  # B = number of values + 1
         ctx.emitter.emit_ABC(Op.RETURN, first_reg, num_values)
-        ctx.emitter.set_last_instr_sourceline(node.span.start.line)
 
     elif isinstance(node, ast.Assignment):
         remaining_required_values = len(node.targets)
@@ -223,8 +222,7 @@ def compile_node(ctx: CodegenContext, node: ast.Node):
                     value_reg,
                     ctx.constants.get(Constant(Constant.Kind.STRING, target.name)),
                 )
-                ctx.emitter.set_last_instr_sourceline(node.span.start.line)
-                # ctx.free_reg(value_reg)
+                ctx.free_reg(value_reg, "global assignment rhs, saved to _G")
 
             else:
                 raise Exception(f"invalid/unhandled assignment target: {target}")
@@ -234,24 +232,94 @@ def compile_node(ctx: CodegenContext, node: ast.Node):
             else:
                 j += 1
 
-    elif isinstance(node, ast.String):
-        r = ctx.alloc_reg()
-        k = ctx.constants.get(Constant(Constant.Kind.STRING, node.value))
-        ctx.emitter.emit_ABx(Op.LOADK, r, k)
-        ctx.emitter.set_last_instr_sourceline(node.span.start.line)
+    elif isinstance(node, ast.If):
+        for condition, block in node.branches:
+            rvalue = compile_node(ctx, condition)
+
+    elif isinstance(node, ast.BinaryOp):
+
+        def compile_operand(n: ast.Node):
+            if is_literal(n):
+                return 256 + compile_literal(ctx, n)
+            else:
+                return compile_node(ctx, n)
+
+        match node.op.kind:
+            case TokenKind.EQ:
+                l_start = len(ctx.proto.instructions)
+                lreg = compile_operand(node.left)
+                l_end = len(ctx.proto.instructions)
+                rreg = compile_operand(node.right)
+
+                if not is_literal(node.left):
+                    ctx.free_reg(lreg, "lhs of == op")
+
+                if not is_literal(node.right):
+                    ctx.free_reg(rreg, "rhs of == op")
+
+                r = ctx.alloc_reg("value for storing == op result")
+
+                ctx.emitter.emit_ABC(Op.EQ, r, lreg, rreg)
+                ctx.emitter.emit_ABx(Op.JMP, r, max(l_end - l_start + 131071, 1))
+
+                ctx.emitter.emit_ABC(Op.LOADBOOL, r, 0, 1)
+                ctx.emitter.emit_ABC(Op.LOADBOOL, r, 1, 0)
+
+            case _:
+                raise Exception(f"unknown/unhandled binary op: {node.op}")
+
         return r
 
-    elif isinstance(node, ast.Number):
-        r = ctx.alloc_reg()
-        k = ctx.constants.get(
+    elif is_literal(node):
+        rvalue = ctx.alloc_reg(f"value for storing literal {node}")
+        if isinstance(node, ast.Boolean):
+            ctx.emitter.emit_ABC(
+                Op.LOADBOOL,
+                rvalue,
+                int(node.value),
+                0,
+            )
+        else:
+            k = compile_literal(ctx, node)
+            ctx.emitter.emit_ABx(Op.LOADK, rvalue, k)
+        return rvalue
+
+    else:
+        raise Exception(f"encountered unknown node: {node}")
+
+
+def is_literal(node: ast.Node):
+    return (
+        isinstance(node, ast.Number)
+        or isinstance(node, ast.String)
+        or isinstance(node, ast.Boolean)
+    )
+
+
+def compile_literal(ctx: CodegenContext, node: ast.Node):
+    if isinstance(node, ast.Number):
+        return ctx.constants.get(
             Constant(
                 Constant.Kind.NUMBER,
                 int(node.value) if node.value.is_integer() else node.value,
             )
         )
-        ctx.emitter.emit_ABx(Op.LOADK, r, k)
-        ctx.emitter.set_last_instr_sourceline(node.span.start.line)
-        return r
+
+    elif isinstance(node, ast.String):
+        return ctx.constants.get(
+            Constant(
+                Constant.Kind.STRING,
+                node.value,
+            )
+        )
+
+    elif isinstance(node, ast.Boolean):
+        return ctx.constants.get(
+            Constant(
+                Constant.Kind.BOOLEAN,
+                node.value,
+            )
+        )
 
     else:
-        raise Exception(f"encountered unknown node: {node}")
+        raise Exception(f"invalid/unhandled literal kind: {node}")
