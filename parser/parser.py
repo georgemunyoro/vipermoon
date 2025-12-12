@@ -335,8 +335,9 @@ class Parser:
         if self.match(TokenKind.IF):
             condition = self.parse_exp()
             branches = []
-            else_block = self.parse_chunk(self.expect(TokenKind.THEN).start)
-            branches.append((condition, else_block))
+            then_block = self.parse_chunk(self.expect(TokenKind.THEN).start)
+            branches.append((condition, then_block))
+            else_block = None
 
             while self.check(TokenKind.ELSEIF):
                 elseif_token = self.expect(TokenKind.ELSEIF)

@@ -46,7 +46,6 @@ class Codegen:
     def emit(self, op: Op, a: int, b=None, c=None, bx=None, sbx=None):
         assert a is not None
         instr = Instruction(op, a, b, c, bx, sbx)
-        print(instr)
         self.instructions.append(instr)
 
     def set_local_reg(self, name: str, reg: int):
@@ -102,29 +101,56 @@ def gen_exp(cg: Codegen, exp: Union[ast.Exp, ast.Node]):
         is_l_reg, left = _gen(exp.left)
         is_r_reg, right = _gen(exp.right)
 
-        opcode = None
+        should_switch_operands = False
+        comp_opcode = None
+
+        if exp.op.kind == TokenKind.LT:
+            comp_opcode = Op.LT
+        elif exp.op.kind == TokenKind.LE:
+            comp_opcode = Op.LE
+        elif exp.op.kind == TokenKind.GT:
+            should_switch_operands = True
+            comp_opcode = Op.LT
+        elif exp.op.kind == TokenKind.GE:
+            should_switch_operands = True
+            comp_opcode = Op.LE
+        elif exp.op.kind == TokenKind.EQ:
+            comp_opcode = Op.EQ
+
+        if comp_opcode:
+            if should_switch_operands:
+                left, right = right, left
+
+            dest = cg.alloc_reg()
+            cg.emit(comp_opcode, a=1, b=left, c=right)
+            cg.emit(Op.JMP, a=0, sbx=1)
+            cg.emit(Op.LOADBOOL, a=dest, b=0, c=1)
+            cg.emit(Op.LOADBOOL, a=dest, b=1, c=0)
+            return dest
+
+        comp_opcode = None
         match exp.op.kind:
             case TokenKind.PLUS:
-                opcode = Op.ADD
+                comp_opcode = Op.ADD
             case TokenKind.STAR:
-                opcode = Op.MUL
+                comp_opcode = Op.MUL
             case TokenKind.MINUS:
-                opcode = Op.SUB
+                comp_opcode = Op.SUB
             case TokenKind.MOD:
-                opcode = Op.MOD
+                comp_opcode = Op.MOD
             case TokenKind.SLASH:
-                opcode = Op.DIV
+                comp_opcode = Op.DIV
             case TokenKind.POW:
-                opcode = Op.POW
+                comp_opcode = Op.POW
 
-        if not opcode:
+        if not comp_opcode:
             print(f"invalid binary op: {exp.op.lexeme}")
             exit(1)
 
         dest = cg.alloc_reg()
         print("reg", cg.reg_count)
 
-        cg.emit(opcode, a=dest, b=left, c=right)
+        cg.emit(comp_opcode, a=dest, b=left, c=right)
         return dest
 
     reg = cg.alloc_reg()
@@ -197,6 +223,31 @@ def gen_stat(cg: Codegen, stat: ast.Stat):
 
     elif isinstance(stat, ast.FunctionCall):
         gen_function_call(cg, stat)
+
+    elif isinstance(stat, ast.If):
+        end_jumps = []
+
+        for i, branch in enumerate(stat.branches):
+            cond, body = branch
+            cond_reg = gen_exp(cg, cond)
+            cg.emit(Op.TEST, a=cond_reg, c=0)
+            cg.emit(Op.JMP, a=0, sbx=0)
+            jmp_idx = len(cg.instructions) - 1
+            gen_block(cg, body)
+            jmps_required = len(cg.instructions) - jmp_idx
+
+            end_jumps.append(len(cg.instructions))
+            cg.emit(Op.JMP, a=0, sbx=0)
+
+            cg.instructions[jmp_idx] = Instruction(Op.JMP, a=0, sbx=jmps_required)
+
+        if stat.else_block:
+            jmp_idx = len(cg.instructions)
+            gen_block(cg, stat.else_block)
+
+        for jmp_idx in end_jumps:
+            jmps_required = len(cg.instructions) - jmp_idx - 1
+            cg.instructions[jmp_idx] = Instruction(Op.JMP, a=0, sbx=jmps_required)
 
     else:
         print("unhandled stat:", stat)
