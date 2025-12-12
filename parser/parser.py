@@ -39,6 +39,26 @@ from parser.scanner.scanner import Scanner
 from parser.scanner.token import Token, TokenKind
 from typing import List, Optional
 
+BINARY_PRECEDENCE = {
+    TokenKind.OR: (1, "left"),
+    TokenKind.AND: (2, "left"),
+    TokenKind.EQ: (3, "left"),
+    TokenKind.NE: (3, "left"),
+    TokenKind.LT: (3, "left"),
+    TokenKind.LE: (3, "left"),
+    TokenKind.GT: (3, "left"),
+    TokenKind.GE: (3, "left"),
+    TokenKind.CONCAT: (4, "right"),
+    TokenKind.PLUS: (5, "left"),
+    TokenKind.MINUS: (5, "left"),
+    TokenKind.STAR: (6, "left"),
+    TokenKind.SLASH: (6, "left"),
+    TokenKind.MOD: (6, "left"),
+    TokenKind.POW: (8, "right"),
+}
+
+UNARY_PREC = 7
+
 
 class Parser:
     current: Optional[Token]
@@ -156,7 +176,28 @@ class Parser:
         span_end = statements[-1].span.end if len(statements) > 0 else at
         return Block(Span(at, span_end), statements)
 
-    def parse_exp(self) -> Exp:
+    def parse_exp(self, min_prec=0) -> Exp:
+        node = self.parse_prefix()
+
+        while True:
+            op = self.current
+            if not op or op.kind not in BINARY_PRECEDENCE:
+                break
+
+            prec, assoc = BINARY_PRECEDENCE[op.kind]
+
+            if prec < min_prec:
+                break
+
+            self.consume()
+
+            next_min_prec = prec + 1 if assoc == "left" else prec
+            rhs = self.parse_exp(next_min_prec)
+            node = BinaryOp(Span(node.span.start, node.span.end), node, op, rhs)
+
+        return node
+
+    def parse_prefix(self):
         if (
             self.check(TokenKind.MINUS)
             or self.check(TokenKind.NOT)
@@ -216,32 +257,6 @@ class Parser:
             node.span = Span(token.start, token.end)
         else:
             node = self.parse_prefixexp()
-
-        while self.current:
-            match self.current.kind:
-                case (
-                    TokenKind.PLUS
-                    | TokenKind.MINUS
-                    | TokenKind.STAR
-                    | TokenKind.SLASH
-                    | TokenKind.POW
-                    | TokenKind.MOD
-                    | TokenKind.CONCAT
-                    | TokenKind.LT
-                    | TokenKind.LE
-                    | TokenKind.GT
-                    | TokenKind.GE
-                    | TokenKind.EQ
-                    | TokenKind.NE
-                    | TokenKind.AND
-                    | TokenKind.OR
-                ):
-                    op = self.fconsume()
-                    r = self.parse_exp()
-                    node = BinaryOp(Span(node.span.start, r.span.end), node, op, r)
-
-                case _:
-                    break
 
         return node
 

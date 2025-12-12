@@ -8,7 +8,7 @@ from pprint import pprint
 import click
 
 from compiler.assembler import Assembler
-from compiler.compile import compile
+from compiler.compile import Codegen, CodegenContext, compile, gen_exp, get_main_proto
 from compiler.disassembler import Disassembler
 from interpreter.interpreter import LuaFrame, run_frame
 
@@ -86,11 +86,24 @@ def run(sourcefile: str) -> None:
 @click.command("compile")
 @click.argument("sourcefile")
 def compile_command(sourcefile: str) -> None:
+
+    with open(sourcefile, "r", errors="replace") as f:
+        ast = Parser(f.read()).parse_exp()
+        print_ast(ast)
+        proto = get_main_proto()
+        with Codegen() as ctx:
+            bc = gen_exp(ctx, ast)
+            print(bc)
+    return
+
     with open(sourcefile, "r", errors="replace") as f:
         ast = Parser(f.read()).parse_chunk()
         print_ast(ast)
+
         click.echo("-" * shutil.get_terminal_size().columns + "\n")
         proto = compile(ast)
+        proto.dump()
+        click.echo("-" * shutil.get_terminal_size().columns + "\n")
 
         asm = Assembler()
         asm.write_header()

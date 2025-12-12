@@ -1,6 +1,6 @@
 import parser.ast as ast
 from parser.scanner.token import TokenKind
-from typing import Optional
+from typing import Dict, Optional
 
 from .constant import Constant
 from .instruction import Instruction, Op
@@ -38,6 +38,33 @@ class InstructionEmitter:
         self.emit_ABC(Op.RETURN, a, 2, 0)
 
 
+class Codegen:
+    def __init__(self):
+        self.instructions = []
+        self.constants = []
+        self.reg_count = 0
+        self.labels = {}
+
+    def alloc_reg(self):
+        reg = self.reg_count
+        self.reg_count += 1
+        return reg
+
+    def free_reg(self):
+        self.reg_count -= 1
+
+    def get_const(self, value):
+        if value in self.constants:
+            return self.constants.index(value)
+        self.constants.append(value)
+        return len(self.constants) - 1
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb): ...
+
+
 class CodegenContext:
     def __init__(self, proto: Prototype):
         self.proto = proto
@@ -48,12 +75,21 @@ class CodegenContext:
         self.blocks = []  # for loop breaks, etc.
         self.expected_return_values = 0
 
+        self.locals = {}
+
     def __enter__(self):
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.emitter.emit_ABC(Op.RETURN, 0, 1, 0)
         self.proto.max_stack_size = self.max_stack_used
+        self.proto.locals = list(self.locals.keys())
+
+    def get_local(self, name: str):
+        if name in self.locals:
+            return self.locals[name]
+        self.locals[name] = self.alloc_reg()
+        return self.locals[name]
 
     # Register management
     def alloc_reg(self, msg: Optional[str] = None):
@@ -74,8 +110,8 @@ class CodegenContext:
             self.reg_top -= 1
 
 
-def compile(node: ast.Block, source="@test.lua") -> Prototype:
-    proto = Prototype(
+def get_main_proto(source="@test.lua"):
+    return Prototype(
         source_name=source,
         line_defined=0,
         last_line_defined=0,
@@ -91,6 +127,10 @@ def compile(node: ast.Block, source="@test.lua") -> Prototype:
         prototypes=[],
     )
 
+
+def compile(node: ast.Block, source="@test.lua") -> Prototype:
+    proto = get_main_proto(source)
+
     with CodegenContext(proto) as ctx:
         for stat in node.stats:
             compile_node(ctx, stat)
@@ -98,7 +138,29 @@ def compile(node: ast.Block, source="@test.lua") -> Prototype:
     return proto
 
 
-def compile_node(ctx: CodegenContext, node: ast.Node):
+def fold(node: ast.BinaryOp):
+    l = fold(node.left) if isinstance(node.left, ast.BinaryOp) else node.left
+    r = fold(node.right) if isinstance(node.right, ast.BinaryOp) else node.right
+
+    if isinstance(l, ast.Number) and isinstance(r, ast.Number):
+        match node.op.kind:
+            case TokenKind.PLUS:
+                return ast.Number(node.span, l.value + r.value)
+            case TokenKind.MINUS:
+                return ast.Number(node.span, l.value - r.value)
+
+    return node
+
+
+def compile_node(
+    ctx: CodegenContext, node: ast.Node, load_comparison_value: bool = True
+):
+    def compile_rk_operand(n: ast.Node):
+        if is_literal(n):
+            return 256 + compile_literal(ctx, n)
+        else:
+            return compile_node(ctx, n)
+
     if isinstance(node, ast.FunctionCall):
         if node.method:
             raise Exception("method calls not implemented")
@@ -125,10 +187,14 @@ def compile_node(ctx: CodegenContext, node: ast.Node):
         return rA
 
     elif isinstance(node, ast.Var):
-        rvalue = ctx.alloc_reg(f"getglobal {node.name}")
-        k = ctx.constants.get(Constant(Constant.Kind.STRING, node.name))
-        ctx.emitter.emit_ABx(Op.GETGLOBAL, rvalue, k)
-        return rvalue
+        try:
+            locals = [l.name for l in ctx.proto.locals]
+            return locals.index(node.name)
+        except Exception as e:
+            rvalue = ctx.alloc_reg(f"getglobal {node.name}")
+            k = ctx.constants.get(Constant(Constant.Kind.STRING, node.name))
+            ctx.emitter.emit_ABx(Op.GETGLOBAL, rvalue, k)
+            return rvalue
 
     elif isinstance(node, ast.FuncName):
         assert len(node.names) == 1
@@ -197,6 +263,39 @@ def compile_node(ctx: CodegenContext, node: ast.Node):
         num_values = len(regs) + 1  # B = number of values + 1
         ctx.emitter.emit_ABC(Op.RETURN, first_reg, num_values)
 
+    elif isinstance(node, ast.LocalVar):
+        values = node.values if node.values else []
+        remaining_required_values = len(values)
+
+        value_regs = []
+        for value in values[:-1]:
+            remaining_required_values -= 1
+            ctx.expected_return_values = 1
+            value_regs.append(compile_node(ctx, value))
+
+        ctx.expected_return_values = remaining_required_values
+        value_regs.append(compile_node(ctx, values[-1]))
+
+        ctx.expected_return_values = 0
+
+        i = 0
+        j = 0
+        for name in node.names:
+            value_reg = value_regs[i] + j
+
+            assert name[1] is None
+
+            if value_reg is not None:
+                ctx.free_reg(value_reg)
+
+            reg = ctx.get_local(name[0].lexeme)
+            ctx.emitter.emit_ABC(Op.MOVE, reg, value_reg)
+
+            if (i + 1) < len(value_regs):
+                i += 1
+            else:
+                j += 1
+
     elif isinstance(node, ast.Assignment):
         remaining_required_values = len(node.targets)
 
@@ -213,19 +312,19 @@ def compile_node(ctx: CodegenContext, node: ast.Node):
 
         i = 0
         j = 0
-        for target in node.targets:
+        for name in node.targets:
             value_reg = value_regs[i] + j
 
-            if isinstance(target, ast.Var):
+            if isinstance(name, ast.Var):
                 ctx.emitter.emit_ABx(
                     Op.SETGLOBAL,
                     value_reg,
-                    ctx.constants.get(Constant(Constant.Kind.STRING, target.name)),
+                    ctx.constants.get(Constant(Constant.Kind.STRING, name.name)),
                 )
                 ctx.free_reg(value_reg, "global assignment rhs, saved to _G")
 
             else:
-                raise Exception(f"invalid/unhandled assignment target: {target}")
+                raise Exception(f"invalid/unhandled assignment target: {name}")
 
             if (i + 1) < len(value_regs):
                 i += 1
@@ -234,36 +333,55 @@ def compile_node(ctx: CodegenContext, node: ast.Node):
 
     elif isinstance(node, ast.If):
         for condition, block in node.branches:
-            rvalue = compile_node(ctx, condition)
+            compile_node(ctx, condition, load_comparison_value=False)
+            b_start = len(ctx.proto.instructions)
+            compile_node(ctx, block)
+            b_end = len(ctx.proto.instructions)
+
+            jmp_ins_bx = b_end - b_start + 131071
+            jmp_ins = Instruction((Op.JMP.value & 0x3F) | (0 << 6) | (jmp_ins_bx << 14))
+            ctx.proto.instructions.insert(b_start, jmp_ins)
+
+    elif isinstance(node, ast.Block):
+        for stat in node.stats:
+            compile_node(ctx, stat)
 
     elif isinstance(node, ast.BinaryOp):
+        node = fold(node)
+        if not isinstance(node, ast.BinaryOp):
+            return compile_node(ctx, node)
 
-        def compile_operand(n: ast.Node):
-            if is_literal(n):
-                return 256 + compile_literal(ctx, n)
-            else:
-                return compile_node(ctx, n)
+        l_start = len(ctx.proto.instructions)
+        lreg = compile_rk_operand(node.left)
+        l_end = len(ctx.proto.instructions)
+        rreg = compile_rk_operand(node.right)
+
+        if not is_literal(node.left):
+            ctx.free_reg(lreg, "lhs of == op")
+
+        if not is_literal(node.right):
+            ctx.free_reg(rreg, "rhs of == op")
+
+        r = ctx.alloc_reg("value for storing == op result")
+
+        token_op_map: Dict[str, Op] = {}
+        token_op_map[TokenKind.EQ.value] = Op.EQ
+        token_op_map[TokenKind.LE.value] = Op.LE
+        token_op_map[TokenKind.MINUS.value] = Op.SUB
+        token_op_map[TokenKind.PLUS.value] = Op.ADD
+        op = token_op_map[node.op.kind.value]
 
         match node.op.kind:
-            case TokenKind.EQ:
-                l_start = len(ctx.proto.instructions)
-                lreg = compile_operand(node.left)
-                l_end = len(ctx.proto.instructions)
-                rreg = compile_operand(node.right)
+            case TokenKind.EQ | TokenKind.LE:
+                ctx.emitter.emit_ABC(op, r, lreg, rreg)
 
-                if not is_literal(node.left):
-                    ctx.free_reg(lreg, "lhs of == op")
+                if load_comparison_value:
+                    ctx.emitter.emit_ABx(Op.JMP, r, max(l_end - l_start, 1) + 131071)
+                    ctx.emitter.emit_ABC(Op.LOADBOOL, r, 0, 1)
+                    ctx.emitter.emit_ABC(Op.LOADBOOL, r, 1, 0)
 
-                if not is_literal(node.right):
-                    ctx.free_reg(rreg, "rhs of == op")
-
-                r = ctx.alloc_reg("value for storing == op result")
-
-                ctx.emitter.emit_ABC(Op.EQ, r, lreg, rreg)
-                ctx.emitter.emit_ABx(Op.JMP, r, max(l_end - l_start + 131071, 1))
-
-                ctx.emitter.emit_ABC(Op.LOADBOOL, r, 0, 1)
-                ctx.emitter.emit_ABC(Op.LOADBOOL, r, 1, 0)
+            case TokenKind.MINUS | TokenKind.PLUS:
+                ctx.emitter.emit_ABC(op, r, lreg, rreg)
 
             case _:
                 raise Exception(f"unknown/unhandled binary op: {node.op}")
@@ -323,3 +441,10 @@ def compile_literal(ctx: CodegenContext, node: ast.Node):
 
     else:
         raise Exception(f"invalid/unhandled literal kind: {node}")
+
+
+def gen_exp(cg: Codegen, exp: ast.Exp):
+    if isinstance(exp, ast.Number):
+        reg = cg.alloc_reg()
+        const_idx = cg.get_const(exp.value)
+        return reg
