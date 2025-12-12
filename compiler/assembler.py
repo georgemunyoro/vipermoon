@@ -78,8 +78,8 @@ class Assembler:
                 self.write_byte(bool(const.const))
 
         self.write_int(len(proto.prototypes))
-        for proto in proto.prototypes:
-            self.write_proto(proto)
+        for p in proto.prototypes:
+            self.write_proto(p)
 
         self.write_int(0)  # TODO: source line position list
 

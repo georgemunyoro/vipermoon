@@ -8,15 +8,16 @@ from .prototype import Local, Prototype
 
 
 class Codegen:
-    def __init__(self, source_name: str):
+    def __init__(self, source_name: str = ""):
         self.source_name = source_name
         self.instructions = []
         self.constants: List[Constant] = []
         self.reg_count = 0
         self.labels = {}
         self.locals: Dict[str, int] = {}
-        self.functions = {}
+        self.prototypes: List[Prototype] = []
         self.max_stack_used = 0
+        self.num_parameters = 0
 
     def alloc_reg(self):
         reg = self.reg_count
@@ -69,7 +70,7 @@ class Codegen:
             line_defined=0,
             last_line_defined=0,
             num_upvalues=0,
-            num_parameters=0,
+            num_parameters=self.num_parameters,
             is_vararg=False,
             max_stack_size=max(self.max_stack_used, 2),
             instructions=self.instructions,
@@ -77,7 +78,7 @@ class Codegen:
             locals=[Local(l, 0, 0) for l in self.locals.keys()],
             source_line_position_list=[],
             upvalues=[],
-            prototypes=[],
+            prototypes=self.prototypes,
         )
 
 
@@ -150,7 +151,6 @@ def gen_exp(cg: Codegen, exp: Union[ast.Exp, ast.Node]):
             exit(1)
 
         dest = cg.alloc_reg()
-        print("reg", cg.reg_count)
 
         cg.emit(comp_opcode, a=dest, b=left, c=right)
         return dest
@@ -176,7 +176,13 @@ def gen_exp(cg: Codegen, exp: Union[ast.Exp, ast.Node]):
 
 def gen_function_call(cg: Codegen, call: ast.FunctionCall, num_results=0):
     arg_regs = [gen_exp(cg, arg) for arg in call.args]
+
+    reg_count = cg.reg_count
     func_reg = gen_exp(cg, call.func)
+    if cg.reg_count == reg_count:
+        r = cg.alloc_reg()
+        cg.emit(Op.MOVE, r, func_reg)
+        func_reg = r
 
     for (
         i,
@@ -185,7 +191,8 @@ def gen_function_call(cg: Codegen, call: ast.FunctionCall, num_results=0):
         cg.emit(Op.MOVE, cg.alloc_reg(), reg)
 
     cg.emit(Op.CALL, a=func_reg, b=len(arg_regs) + 1, c=num_results + 1)
-    # return result_reg
+
+    return func_reg
 
 
 def gen_stat(cg: Codegen, stat: ast.Stat):
@@ -244,6 +251,40 @@ def gen_stat(cg: Codegen, stat: ast.Stat):
         cg.emit(Op.TEST, a=cond_reg, c=1)
         cg.emit(Op.JMP, a=0, sbx=1)
         cg.emit(Op.JMP, a=0, sbx=body_idx - len(cg.instructions) - 1)
+
+    elif isinstance(stat, ast.Return):
+        if len(stat.values) == 0:
+            cg.emit(Op.RETURN, 0, 1)
+        else:
+            regs = [gen_exp(cg, value) for value in stat.values]
+            cg.emit(Op.RETURN, a=regs[0], b=len(regs) + 1)
+
+    elif isinstance(stat, ast.FunctionDef):
+        with Codegen() as fn_cg:
+            for param in stat.body.params:
+                fn_cg.set_local_reg(param.lexeme, fn_cg.alloc_reg())
+
+            for body_stat in stat.body.block.stats:
+                gen_stat(fn_cg, body_stat)
+
+            if fn_cg.instructions[-1].op != Op.RETURN:
+                fn_cg.emit(Op.RETURN, 0, 1, 0)
+
+            fn_cg.num_parameters = len(stat.body.params)
+            proto = fn_cg.get_proto()
+
+        pidx = len(cg.prototypes)
+        cg.prototypes.append(proto)
+
+        reg = cg.alloc_reg()
+        cg.emit(Op.CLOSURE, a=reg, bx=pidx)
+
+        assert len(stat.name.names) == 1
+
+        if not stat.is_local:
+            raise
+        else:
+            cg.locals[stat.name.names[0].lexeme] = reg
 
     elif isinstance(stat, ast.If):
         end_jumps = []
