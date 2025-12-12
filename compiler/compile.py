@@ -184,15 +184,17 @@ def gen_function_call(cg: Codegen, call: ast.FunctionCall, num_results=0):
         cg.emit(Op.MOVE, r, func_reg)
         func_reg = r
 
-    for (
-        i,
-        reg,
-    ) in enumerate(arg_regs):
+    for reg in arg_regs:
         cg.emit(Op.MOVE, cg.alloc_reg(), reg)
 
     cg.emit(Op.CALL, a=func_reg, b=len(arg_regs) + 1, c=num_results + 1)
 
-    return func_reg
+    if num_results == 0:
+        return
+    elif num_results == 1:
+        return func_reg
+    else:
+        return [func_reg + i for i in range(num_results)]
 
 
 def gen_stat(cg: Codegen, stat: ast.Stat):
@@ -208,7 +210,11 @@ def gen_stat(cg: Codegen, stat: ast.Stat):
                     reg_val = gen_function_call(cg, v, num_results=num_targets)
                 else:
                     reg_val = gen_exp(cg, v)
-                value_regs.append(reg_val)
+
+                if isinstance(reg_val, list):
+                    value_regs += reg_val
+                else:
+                    value_regs.append(reg_val)
 
         for name_token, reg_val in zip(stat.names, value_regs):
             cg.set_local_reg(name_token[0].lexeme, reg_val)
