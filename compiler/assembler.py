@@ -52,8 +52,8 @@ class Assembler:
             self.bytecode.append(b)
 
     def write_proto(self, proto: Prototype):
-        self.write_size_t(len(proto.source_name) + 1)
-        self.write_string(proto.source_name)
+        self.write_size_t(len(proto.source_name) + 2)
+        self.write_string(f"@{proto.source_name}")
         self.write_int(proto.line_defined)
         self.write_int(proto.last_line_defined)
         self.write_byte(len(proto.upvalues))

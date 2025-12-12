@@ -1,4 +1,5 @@
 from enum import Enum
+from typing import Optional
 
 
 class Op(Enum):
@@ -42,14 +43,60 @@ class Op(Enum):
     VARARG = 37
 
 
-def iABx(opcode, A, Bx):
-    return Instruction(opcode | ((A & 0xFF) << 6) | ((Bx & 0x3FFFF) << 14))
+OP_SHIFT = 0
+OP_MASK = 0x3F
+
+A_MASK = 0xFF
+A_SHIFT = 6
+
+B_MASK = 0x1FF
+B_SHIFT = 23
+
+C_MASK = 0x1FF
+C_SHIFT = 14
+
+BX_MASK = 0x3FFFF
+BX_SHIFT = 14
+
+SBX_MASK = 0x3FFFF
+SBX_SHIFT = 14
 
 
 class Instruction:
-    def __init__(self, instr: int):
-        self.instr = instr
+    instr: int = 0
+
+    def __init__(
+        self,
+        opcode: Op,
+        a: int,
+        b: Optional[int] = None,
+        c: Optional[int] = None,
+        bx: Optional[int] = None,
+        sbx: Optional[int] = None,
+    ):
         self.sourceline = 0
+        op = opcode.value
+
+        assert a is not None and a < 256
+
+        self.instr |= (op & OP_MASK) << OP_SHIFT
+        self.instr |= (a & A_MASK) << A_SHIFT
+
+        if b is not None:
+            assert b < 512
+            self.instr |= (b & B_MASK) << B_SHIFT
+
+        if c is not None:
+            assert c < 512
+            self.instr |= (c & C_MASK) << C_SHIFT
+
+        if bx is not None:
+            assert bx < 262144
+            self.instr |= (bx & BX_MASK) << BX_SHIFT
+
+        if sbx is not None:
+            assert sbx >= -131071 and sbx <= 131071
+            self.instr |= ((sbx + 131071) & SBX_MASK) << SBX_SHIFT
 
     @property
     def op(self):
@@ -124,7 +171,7 @@ class Instruction:
                 s += f"{self.A} {-(self.Bx + 1)}"
 
             case Op.LOADK | Op.CLOSURE:
-                s += f"{self.A} {self.Bx}"
+                s += f"{self.A} {-self.Bx - 1}"
 
             case Op.CLOSE:
                 s += f"{self.A}"

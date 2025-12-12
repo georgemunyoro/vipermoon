@@ -31,10 +31,10 @@ class Prototype:
 
     def dump(self):
         logging.info(
-            f"function <test.lua:{self.line_defined},{self.last_line_defined}> ({len(self.instructions)} instructions)"
+            f"function <{self.source_name}:{self.line_defined},{self.last_line_defined}> ({len(self.instructions)} instructions)"
         )
         logging.info(
-            f"{self.num_parameters} param, {len(self.locals) + len(self.constants) + len(self.prototypes) + len(self.upvalues)} slots, {len(self.upvalues)} upvalues, {len(self.locals)} local{'s' if len(self.locals) != 1 else ''}, {len(self.constants)} constants, {len(self.prototypes)} functions"
+            f"{self.num_parameters} param, {self.max_stack_size} slots, {len(self.upvalues)} upvalues, {len(self.locals)} local{'s' if len(self.locals) != 1 else ''}, {len(self.constants)} constants, {len(self.prototypes)} functions"
         )
 
         for i, instr in enumerate(self.instructions):
