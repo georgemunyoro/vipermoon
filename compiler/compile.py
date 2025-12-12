@@ -43,10 +43,12 @@ class Codegen:
         self.constants.append(Constant(kind=kind, const=value))
         return len(self.constants) - 1
 
-    def emit(self, op: Op, a: int, b=None, c=None, bx=None, sbx=None):
+    def emit(self, op: Op, a: int, b=None, c=None, bx=None, sbx=None) -> int:
         assert a is not None
+        instr_idx = len(self.instructions)
         instr = Instruction(op, a, b, c, bx, sbx)
         self.instructions.append(instr)
+        return instr_idx
 
     def set_local_reg(self, name: str, reg: int):
         self.locals[name] = reg
@@ -223,6 +225,16 @@ def gen_stat(cg: Codegen, stat: ast.Stat):
 
     elif isinstance(stat, ast.FunctionCall):
         gen_function_call(cg, stat)
+
+    elif isinstance(stat, ast.While):
+        cond_idx = len(cg.instructions)
+        cond_reg = gen_exp(cg, stat.test)
+        cg.emit(Op.TEST, a=cond_reg, c=0)
+        jmp_idx = cg.emit(Op.JMP, a=0, sbx=0)
+        gen_block(cg, stat.block)
+        jmps_required = len(cg.instructions) - jmp_idx
+        cg.emit(Op.JMP, a=0, sbx=-(len(cg.instructions) - cond_idx) - 1)
+        cg.instructions[jmp_idx] = Instruction(Op.JMP, a=0, sbx=jmps_required)
 
     elif isinstance(stat, ast.If):
         end_jumps = []
