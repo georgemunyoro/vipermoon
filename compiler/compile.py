@@ -233,8 +233,17 @@ def gen_stat(cg: Codegen, stat: ast.Stat):
         jmp_idx = cg.emit(Op.JMP, a=0, sbx=0)
         gen_block(cg, stat.block)
         jmps_required = len(cg.instructions) - jmp_idx
-        cg.emit(Op.JMP, a=0, sbx=-(len(cg.instructions) - cond_idx) - 1)
+        cg.emit(Op.JMP, a=0, sbx=cond_idx - len(cg.instructions) - 1)
         cg.instructions[jmp_idx] = Instruction(Op.JMP, a=0, sbx=jmps_required)
+
+    elif isinstance(stat, ast.Repeat):
+        body_idx = len(cg.instructions)
+        print(body_idx)
+        gen_block(cg, stat.block)
+        cond_reg = gen_exp(cg, stat.test)
+        cg.emit(Op.TEST, a=cond_reg, c=1)
+        cg.emit(Op.JMP, a=0, sbx=1)
+        cg.emit(Op.JMP, a=0, sbx=body_idx - len(cg.instructions) - 1)
 
     elif isinstance(stat, ast.If):
         end_jumps = []
