@@ -82,27 +82,65 @@ class Codegen:
         )
 
 
+def gen_rk(cg: Codegen, n: ast.Node):
+    if isinstance(n, ast.Number) or isinstance(n, ast.String):
+        return False, 256 + cg.get_const(n.value)
+    else:
+        return True, gen_exp(cg, n)
+
+
 def gen_exp(cg: Codegen, exp: Union[ast.Exp, ast.Node]):
     if isinstance(exp, ast.Var):
         if exp.prefix is None:
             if exp.name in cg.locals:
                 return cg.get_local_reg(exp.name)
             else:
-                reg = cg.alloc_reg()
+                table_reg = cg.alloc_reg()
                 const_idx = cg.get_const(exp.name)
-                cg.emit(Op.GETGLOBAL, a=reg, bx=const_idx)
-                return reg
+                cg.emit(Op.GETGLOBAL, a=table_reg, bx=const_idx)
+                return table_reg
+
+    if isinstance(exp, ast.TableConstructor):
+        table_reg = cg.alloc_reg()
+        new_table_instr_idx = cg.emit(Op.NEWTABLE, a=table_reg, b=0, c=0)
+
+        num_hash_entries = 0
+        list_vals = []
+
+        for field in exp.fields:
+            if field.key is not None:
+                assert isinstance(field.key, ast.Var)
+                assert field.key.index is None
+                assert field.key.prefix is None
+                assert field.key.attr is None
+
+                index = 256 + cg.get_const(field.key.name)
+                _, value = gen_rk(cg, field.value)
+
+                cg.emit(Op.SETTABLE, a=table_reg, b=index, c=value)
+                num_hash_entries += 1
+
+            else:
+                list_vals.append(gen_exp(cg, field.value))
+
+        if len(list_vals) > 0:
+            list_val_regs = []
+            for val in list_vals:
+                val_reg = cg.alloc_reg()
+                cg.emit(Op.MOVE, a=val_reg, b=val)
+                list_val_regs.append(val_reg)
+
+            cg.emit(Op.SETLIST, a=table_reg, b=len(list_vals), c=1)
+
+        cg.instructions[new_table_instr_idx] = Instruction(
+            Op.NEWTABLE, a=table_reg, b=len(list_vals), c=num_hash_entries
+        )
+
+        return table_reg
 
     if isinstance(exp, ast.BinaryOp):
-
-        def _gen(n: ast.Node):
-            if isinstance(n, ast.Number) or isinstance(n, ast.String):
-                return False, 256 + cg.get_const(n.value)
-            else:
-                return True, gen_exp(cg, n)
-
-        is_l_reg, left = _gen(exp.left)
-        is_r_reg, right = _gen(exp.right)
+        _, left = gen_rk(cg, exp.left)
+        _, right = gen_rk(cg, exp.right)
 
         should_switch_operands = False
         comp_opcode = None
@@ -155,23 +193,23 @@ def gen_exp(cg: Codegen, exp: Union[ast.Exp, ast.Node]):
         cg.emit(comp_opcode, a=dest, b=left, c=right)
         return dest
 
-    reg = cg.alloc_reg()
+    table_reg = cg.alloc_reg()
 
     if isinstance(exp, ast.Number) or isinstance(exp, ast.String):
         const_idx = cg.get_const(exp.value)
-        cg.emit(Op.LOADK, a=reg, bx=const_idx)
+        cg.emit(Op.LOADK, a=table_reg, bx=const_idx)
 
     elif isinstance(exp, ast.Boolean):
-        cg.emit(Op.LOADBOOL, a=reg, b=1 if exp.value else 0, c=0)
+        cg.emit(Op.LOADBOOL, a=table_reg, b=1 if exp.value else 0, c=0)
 
     elif isinstance(exp, ast.Nil):
-        cg.emit(Op.LOADNIL, a=reg, b=reg)
+        cg.emit(Op.LOADNIL, a=table_reg, b=table_reg)
 
     else:
         print("unhandled exp: ", exp)
         exit(1)
 
-    return reg
+    return table_reg
 
 
 def gen_function_call(cg: Codegen, call: ast.FunctionCall, num_results=0):
