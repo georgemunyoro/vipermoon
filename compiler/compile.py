@@ -99,6 +99,29 @@ def gen_exp(cg: Codegen, exp: Union[ast.Exp, ast.Node]):
                 const_idx = cg.get_const(exp.name)
                 cg.emit(Op.GETGLOBAL, a=table_reg, bx=const_idx)
                 return table_reg
+        else:
+            raise
+
+    if isinstance(exp, ast.AttrExp):
+        dest = cg.alloc_reg()
+        cg.emit(
+            Op.GETTABLE,
+            a=dest,
+            b=gen_exp(cg, exp.value),
+            c=256 + cg.get_const(exp.attr.lexeme),
+        )
+        return dest
+
+    if isinstance(exp, ast.IndexExp):
+        dest = cg.alloc_reg()
+        _, index = gen_rk(cg, exp.index)
+        cg.emit(
+            Op.GETTABLE,
+            a=dest,
+            b=gen_exp(cg, exp.value),
+            c=index,
+        )
+        return dest
 
     if isinstance(exp, ast.TableConstructor):
         table_reg = cg.alloc_reg()
