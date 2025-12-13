@@ -36,9 +36,10 @@ class Codegen:
         kind = None
         if isinstance(value, str):
             kind = Constant.Kind.STRING
-        elif isinstance(value, float) or isinstance(int, value):
+        elif isinstance(value, float) or isinstance(value, int):
             kind = Constant.Kind.NUMBER
         if kind is None:
+            print(value)
             raise
 
         self.constants.append(Constant(kind=kind, const=value))
@@ -91,7 +92,7 @@ def gen_rk(cg: Codegen, n: ast.Node):
 
 def gen_exp(cg: Codegen, exp: Union[ast.Exp, ast.Node]):
     if isinstance(exp, ast.Var):
-        if exp.prefix is None:
+        if exp.prefix is None and exp.index is None and exp.attr is None:
             if exp.name in cg.locals:
                 return cg.get_local_reg(exp.name)
             else:
@@ -294,8 +295,29 @@ def gen_stat(cg: Codegen, stat: ast.Stat):
             value_regs.append(reg_val)
 
         for target, reg_val in zip(stat.targets, value_regs):
-            target_reg = cg.get_local_reg(target.name)
-            cg.emit(Op.MOVE, a=target_reg, b=reg_val)
+            if isinstance(target, ast.IndexExp):
+                assert target.index is not None
+                _, index = gen_rk(cg, target.index)
+                table = gen_exp(cg, target.value)
+                cg.emit(Op.SETTABLE, a=table, b=index, c=reg_val)
+
+            elif isinstance(target, ast.AttrExp):
+                assert target.attr is not None
+                index = 256 + cg.get_const(target.attr.lexeme)
+                table = gen_exp(cg, target.value)
+                cg.emit(Op.SETTABLE, a=table, b=index, c=reg_val)
+
+            elif isinstance(target, ast.Var):
+                assert target.index is None
+                assert target.attr is None
+                assert target.prefix is None
+
+                target_reg = cg.get_local_reg(target.name)
+                cg.emit(Op.MOVE, a=target_reg, b=reg_val)
+
+            else:
+                print(target)
+                raise
 
     elif isinstance(stat, ast.FunctionCall):
         gen_function_call(cg, stat)
@@ -349,6 +371,7 @@ def gen_stat(cg: Codegen, stat: ast.Stat):
         assert len(stat.name.names) == 1
 
         if not stat.is_local:
+            print(stat)
             raise
         else:
             cg.locals[stat.name.names[0].lexeme] = reg
